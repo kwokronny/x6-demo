@@ -1,0 +1,45 @@
+.x6-graph {
+  --edge-border: theme("colors.border");
+  --edge-hover: theme("colors.brand");
+  --edge-success: theme("colors.success");
+  --edge-danger: theme("colors.danger");
+}
+
+.x6-node foreignObject body {
+  padding: 20px;
+}
+
+.graph-node {
+  --at-apply: "w-[362px] rounded-lg bg-white shadow-node overflow-hidden box-border";
+
+  &[focus='true'],
+  &:hover {
+    --at-apply: "shadow-node ring-3 ring-brand";
+  }
+}
+
+
+.graph-port {
+  fill: white;
+  stroke-width: 3;
+  stroke: var(--port-color);
+
+  &:hover {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+  &[connected="true"] {
+    fill: var(--port-color);
+  }
+  &[hover="true"] {
+    fill: var(--edge-hover) !important;
+    stroke: var(--edge-hover) !important;
+  }
+}
+
+.edge-remove {
+  --at-apply: "fill-white cursor-pointer";
+  &:hover {
+    --at-apply: "fill-brand-900";
+  }
+}

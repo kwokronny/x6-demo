@@ -1,267 +1,160 @@
 <template>
-  <div class="relative overflow-hidden" v-bind="$attrs">
-    <div style="size-full">
+  <div class="relative overflow-hidden size-full" v-bind="$attrs">
+    <div class="size-full">
       <div ref="GraphDOM" class="select-none"></div>
     </div>
     <TeleportContainer />
   </div>
+  <div
+    :key="nextMenu.pos?.x"
+    v-show="nextMenu.pos"
+    ref="nextMenuRef"
+    class="shadow-node rounded-sm absolute b-[1.5px] b-dashed b-border bg-white"
+    @mousedown.stop
+    :style="menuPosStyle"
+  >
+    <div class="p-m2 text-tl">Choose first step👇🏻</div>
+    <div class="p-m2">
+      <ChooseNextStep @select="handleChooseNode" />
+    </div>
+  </div>
 </template>
 <script setup lang="ts">
-import './graph';
-import { Graph, Node, Edge, Options, Cell, Model } from '@antv/x6';
-import { getTeleport } from '@antv/x6-vue-shape';
-import { onMounted, provide, reactive, ref, toRefs } from 'vue';
+import "./graph";
+import { Graph, Node, Edge, Cell } from "@antv/x6";
+import { getTeleport } from "@antv/x6-vue-shape";
+import { computed, onMounted, reactive, ref } from "vue";
+import { randomID } from "./util";
+import ChooseNextStep from "./components/ChooseNextStep.vue";
 
 const TeleportContainer = getTeleport();
-
-interface IProp {
-  readonly?: boolean;
-}
-const props = withDefaults(defineProps<IProp>(), {
-  readonly: false,
-});
-
-defineExpose({
-  loadGraph,
-  setCurrentNode,
-  validNodes,
-  toJSON,
-  execGraph,
-});
-
 onMounted(() => {
   initGraph();
 });
 
-function execGraph(callback: (graph: Graph) => void) {
-  if (graph.value) {
-    callback(graph.value);
-  }
-}
-
-let increment = 1;
 const GraphDOM = ref<HTMLDivElement>();
 let graph = ref<Graph>();
 
+const currentNode = ref<Node>();
+
 function initGraph() {
   if (GraphDOM.value) {
-    const options: Partial<Options.Manual> = {
+    graph.value = new Graph({
       container: GraphDOM.value,
       autoResize: true,
-      scaling: {
-        min: 0.5, // 默认值为 0.01
-        max: 4, // 默认值为 16
-      },
       panning: true,
       connecting: {
-        connector: 'curveConnector',
+        connector: "curveConnector",
         allowBlank: false,
-        sourceAnchor: 'port',
-        targetAnchor: 'node-left',
-        connectionPoint: { name: 'anchor' },
-      },
-      interacting: false,
-      background: {
-        color: '#ccc',
-      },
-      mousewheel: {
-        enabled: true,
-        modifiers: ['ctrl', 'meta'],
-        factor: 1.02,
-      },
-    };
-    if (props.readonly === false) {
-      options.interacting = {
-        // 限制连接节点
-        nodeMovable: function () {
-          // 当有GuideNode时禁用交互
-          return !this.getCellById('GuideNode');
-        },
-      };
-      options.highlighting = {
-        default: {
-          name: 'hover',
-        },
-      };
-      if (options.connecting) {
+        sourceAnchor: "port-right",
+        targetAnchor: "node-left",
+        connectionPoint: { name: "anchor" },
+
         // 创建连线时配置连线样式
-        options.connecting.createEdge = (args) => {
-          let attrs = {};
-          let group = args.sourceMagnet.getAttribute('port-group');
-          /** condition 特殊处理 */
-          if (args.sourceCell.shape === 'ConditionNode' && group === 'then') {
-            group = 'success';
-          }
-          const lineColorMap = {
-            success: 'success',
-            else: 'error',
-            onReply: 'warning',
-            notReply: 'error',
-          };
-          const color = `var(--pl-color-${
-            lineColorMap[group as keyof typeof lineColorMap] || 'border'
-          })`;
-          attrs = {
+        createEdge({ sourceMagnet }) {
+          let portColor = sourceMagnet.getAttribute("color");
+          const color = portColor || "var(--edge-border)";
+          const attrs = {
             line: {
-              condition: group === 'success' ? true : false,
               color, // 记录原色彩，方便hover高亮变色后回复原色
               stroke: color,
             },
           };
-          return graph.value?.createEdge({
-            shape: 'chat-edge',
+          return this.createEdge({
+            shape: "graph-edge",
             attrs,
           });
-        };
-        // 限制连接节点
-        options.connecting.validateConnection = ({
-          sourceCell,
-          targetCell,
-          targetMagnet,
-        }) => {
-          const ignoreNode = ['TriggerNode', 'GuideNode'];
+        },
+        validateConnection: ({ sourceCell, targetCell, targetMagnet }) => {
+          const ignoreNode = ["TriggerNode", "GuideNode"];
           return (
-            !ignoreNode.includes(targetCell?.shape || '') &&
+            !ignoreNode.includes(targetCell?.shape || "") &&
             sourceCell?.id !== targetCell?.id &&
-            !targetMagnet?.getAttribute('port')
+            !targetMagnet?.getAttribute("port")
           );
-        };
-      }
-    }
-    graph.value = new Graph(options);
-
-    if (props.readonly === false) {
-      graph.value.on('node:click', ({ node }) => {
-        if (currentNode.value?.id !== node.id) {
-          validNodes();
-        }
-        setCurrentNode(node);
-      });
-
-      graph.value.on('cell:removed', ({ cell }) => {
-        validNodes();
-        if (cell.isNode() && currentNode.value?.id === cell.id) {
-          setCurrentNode(undefined);
-        }
-      });
-
-      graph.value.on('blank:click', () => {
-        if (currentNode.value !== undefined) {
-          setCurrentNode(undefined);
-          validNodes();
-        }
-      });
-
-      //#region 显示快捷菜单
-      graph.value.on('edge:mouseup', ({ edge, e }) => {
-        if (!edge.getTargetCell()) {
-          // const { portData, node } = getConnetedPortDataNodeByEdge(graph.value!, edge)
-          // /** view-website button创建新的node */
-          // if (node.shape === 'MessageNode' && portData?.actionType=== 'view-website') {
-          //   console.log(11, portData, node)
-          // }
-          hideShortcutMenu();
-          const menu = document.querySelector('.shortcut-menu');
-          if (menu) {
-            const bbox = menu.getBoundingClientRect();
-            let x = e.clientX;
-            let y = e.clientY;
-            x =
-              bbox.width + x > window.innerWidth
-                ? x - (bbox.width + x - window.innerWidth)
-                : x;
-            y =
-              bbox.height + y > window.innerHeight
-                ? y - (bbox.height + y - window.innerHeight)
-                : y;
-            shortcut.pos = { x, y };
-            const edgeProp = edge.getProp(),
-              offsetX = x - e.clientX,
-              offsetY = y - e.clientY;
-            edgeProp.target.x += offsetX;
-            edgeProp.target.y += offsetY;
-            shortcut.edge = graph.value?.addEdge(edgeProp);
-          }
-        }
-      });
-
-      window.addEventListener('mousedown', hideShortcutMenu);
-      //#endregion
-
-      //#region 处理连线时一个连接村庄只可连接一个节点
-      graph.value.on('edge:added', onlyOutgoingEdge);
-      graph.value.on('edge:connected', onlyOutgoingEdge);
-      //#endregion
-
-      graph.value.on('edge:mouseenter', ({ edge, e }) => {
-        if (e.handleObj.originType === 'mouseup' || !edge.getTargetNode())
-          return;
-        edge.attr('line/stroke', 'var(--pl-color-brand)');
-        edge.getSourceNode()?.setPortProp(edge.getSourcePortId()!, {
-          attrs: { circle: { hover: true } },
-        });
-        if (
-          !edge.hasTools() &&
-          edge.getTargetNode()?.shape !== 'GuideNode' &&
-          edge.getSourceNode()?.shape !== 'BroadcastTriggerNode' // 禁止删除broadcast trigger连接的线
-        ) {
-          edge.addTools([
-            {
-              name: 'edge-remove',
-              args: {
-                distance: edge.getPolyline().length() * -0.3,
-              },
-            },
-          ]);
-        }
-      });
-
-      graph.value.on('edge:mouseleave', ({ edge }) => {
-        edge.getSourceNode()?.setPortProp(edge.getSourcePortId()!, {
-          attrs: { circle: { hover: false } },
-        });
-        const originColor = edge.getAttrByPath<string>('line/color');
-        edge.attr('line/stroke', originColor);
-        edge.removeTools();
-      });
-
-      graph.value.on('node:added', ({ node }) => {
-        if (!graph.value) return;
-        if (graph.value.getNodes().length > 1 && node.id !== 'GuideNode') {
-          graph.value.removeCell('GuideNode', { history: false });
-        }
-        let data = Object.assign({}, node.getData());
-        if (data.Title) {
-          data.Title = `${data.Title.replace(/(\s#\d+)/, '')} #${increment++}`;
-        }
-        node.setData(data);
-        setTimeout(() => {
-          validNodes();
-        }, 50);
-      });
-    }
+        },
+      },
+      // 高亮器配置为className，但不设置args，取消默认的连线与拖动时节点高亮样式
+      highlighting: {
+        default: {
+          name: "className",
+        },
+      },
+      background: {
+        color: "#f8fafb",
+      },
+    });
+    settingNodeEffect();
+    settingEdgeEffect();
+    settingNextMenu();
+    graph.value.addNode({
+      id: "TriggerNode",
+      shape: "TriggerNode",
+      x: 300,
+      y: 100,
+    });
   }
 }
 
-function setCurrentNode(nodeOrId?: Node | string) {
+const createGuide = () => {
   if (!graph.value) return;
-  graph.value.getNodes().forEach(async (node: Node) => {
-    node.attr('.graph-node/focus', 'false');
+  graph.value.addNode({
+    id: "TriggerNode",
+    shape: "TriggerNode",
+    x: 300,
+    y: 100,
   });
+};
+
+//#region 设置节点交互
+const settingNodeEffect = () => {
+  if (!graph.value) return;
+  graph.value.on("node:click", ({ node }) => {
+    if (currentNode.value?.id !== node.id) {
+      checkGraphStatus();
+    }
+    setCurrentNode(node);
+  });
+
+  graph.value.on("cell:removed", ({ cell }) => {
+    checkGraphStatus();
+    if (cell.isNode() && currentNode.value?.id === cell.id) {
+      setCurrentNode(undefined);
+    }
+  });
+
+  graph.value.on("blank:click", () => {
+    if (currentNode.value !== undefined) {
+      setCurrentNode(undefined);
+      checkGraphStatus();
+    }
+  });
+};
+
+// 设置聚焦节点
+const setCurrentNode = (nodeOrId?: Node | string) => {
+  if (!graph.value) return;
+  // 先将所有节点的聚焦状态关闭
+  graph.value.getNodes().forEach(async (node: Node) => {
+    node.attr(".graph-node/focus", "false");
+  });
+  // 支持通过 ID 或直接 Node对象 设置
   let node: Cell;
   if (!nodeOrId) {
     currentNode.value = undefined;
     return;
-  } else if (typeof nodeOrId === 'string') {
+  } else if (typeof nodeOrId === "string") {
     node = graph.value.getCellById(nodeOrId);
   } else {
     node = nodeOrId;
   }
-  if (!node.isNode() || node.shape === 'GuideNode') return;
+  // 聚焦前确认节点是否有效与是否为节点
+  if (!node?.isNode()) return;
   setTimeout(() => {
     currentNode.value = node;
-    node.attr('.graph-node/focus', 'true');
+    node.attr(".graph-node/focus", "true");
   }, 50);
+  // 平移至当前节点的位置
   const translate = graph.value.translate();
   const zoom = graph.value.zoom();
   const bbox = node.getBBox();
@@ -271,65 +164,84 @@ function setCurrentNode(nodeOrId?: Node | string) {
   ) {
     graph.value.positionPoint({ x: bbox.x, y: bbox.y }, 380, 100);
   }
-}
+};
 
-emitter.on('setCurrentNode', setCurrentNode);
-
-function validNodes() {
+const checkGraphStatus = () => {
   if (!graph.value) return;
+  //缓存所有连线对应的端口数据
   const connectedPort = graph.value.getEdges().map((edge) => {
-    const originColor = edge.getAttrByPath<string>('line/color');
-    edge.attr('line/stroke', originColor);
+    const originColor = edge.getAttrByPath<string>("line/color");
+    edge.attr("line/stroke", originColor);
     edge.removeTools();
     return `${edge.getSourceCellId()}-${edge.getSourcePortId()}${
-      edge.getTargetNode() ? '' : '-shortcut'
+      edge.getTargetNode() ? "" : "-shortcut"
     }`;
   });
   graph.value.getNodes().forEach(async (node: Node) => {
-    if (node.shape !== 'GuideNode') {
-      const valid = await graphData.nodeValid(node.shape, node.getData());
-      node.attr('.graph-node/error', `${!valid}`);
-      // node.attr('.graph-node/focus', `${currentNode.value?.id === node.id}`)
-      const ports = node.getPorts();
-      ports.forEach((port) => {
-        const connected = connectedPort.indexOf(`${node.id}-${port.id}`) > -1;
-        node.setPortProp(port.id!, {
-          attrs: {
-            circle: {
-              connected,
-              hover: false,
-            },
+    // 此处可以增加检验节点是否正确并为节点设置 error 状态
+    const ports = node.getPorts();
+    ports.forEach((port) => {
+      // 判断端口是否已连接，
+      const connected = connectedPort.indexOf(`${node.id}-${port.id}`) > -1;
+      node.setPortProp(port.id!, {
+        attrs: {
+          circle: {
+            connected,
+            hover: false,
           },
-        });
+        },
       });
-    }
+    });
   });
-}
+};
+//#endregion
 
-function loadGraph(data: Model.ToJSONData & { increment?: number }) {
+//#region 设置连线交互效果
+const settingEdgeEffect = () => {
   if (!graph.value) return;
-  graph.value.clearCells();
-  increment = data.increment || 1;
-  graph.value.fromJSON(data.cells);
-  validNodes();
-}
-
-function toJSON() {
-  const data = graph.value?.toJSON();
-  data?.cells.forEach((cell) => {
-    if (cell.attrs?.['.graph-node']?.focus) {
-      cell.attrs['.graph-node'].focus = false;
+  graph.value.on("edge:added", onlyOutgoingEdge);
+  graph.value.on("edge:connected", onlyOutgoingEdge);
+  graph.value.on("edge:mouseenter", ({ edge, e }) => {
+    if (e.handleObj.originType === "mouseup" || !edge.getTargetNode()) return;
+    // 设置连线颜色
+    edge.attr("line/stroke", "var(--edge-hover)");
+    // 对应连线的端口也要设置hover状态
+    edge.getSourceNode()?.setPortProp(edge.getSourcePortId()!, {
+      attrs: { circle: { hover: true } },
+    });
+    // 连线增加删除按钮，引导节点连线不添加
+    if (!edge.hasTools() && edge.getTargetNode()?.shape !== "GuideNode") {
+      edge.addTools([
+        {
+          name: "edge-remove",
+          args: {
+            distance: edge.getPolyline().length() * -0.3,
+          },
+        },
+      ]);
     }
   });
-  return Object.assign({ increment }, data);
-}
+  graph.value.on("edge:mouseleave", ({ edge }) => {
+    // 获取连接原颜色，并设置
+    const originColor = edge.getAttrByPath<string>("line/color");
+    edge.attr("line/stroke", originColor);
+    // 对应连线的端口也要设置hover状态
+    edge.getSourceNode()?.setPortProp(edge.getSourcePortId()!, {
+      attrs: { circle: { hover: false } },
+    });
+    // 移除连线上的所有按钮
+    edge.removeTools();
+  });
+};
 
-// 节点仅保留一个 outgoing 边处理
-function onlyOutgoingEdge({ edge }: { edge: Edge }) {
+// 限制节点每个端口只可以连接一个节点
+const onlyOutgoingEdge = ({ edge }: { edge: Edge }) => {
   if (graph.value && edge.getSourceCellId() && edge.getTargetCellId()) {
+    // 设置连线对应的source端口为连接状态
     edge.getSourceNode()?.setPortProp(edge.getSourcePortId()!, {
       attrs: { circle: { connected: true } },
     });
+    // 获取此节点端口的所有的连线，仅保留一条连线
     let outgoingEdges = graph.value.getOutgoingEdges(edge.getSourceCellId());
     if (outgoingEdges) {
       outgoingEdges.forEach((outEdge) => {
@@ -342,28 +254,85 @@ function onlyOutgoingEdge({ edge }: { edge: Edge }) {
       });
     }
   }
-}
+};
+//#endregion
 
+//#region 显示快捷创建节点菜单
+const nextMenuRef = ref<HTMLDivElement>();
+const nextMenu = reactive<{
+  pos?: { x: number; y: number };
+  edge?: Edge;
+}>({});
+
+const menuPosStyle = computed(() => {
+  return {
+    left: `${nextMenu.pos?.x || 0}px`,
+    top: `${(nextMenu.pos?.y || 0) - 25}px`,
+  };
+});
+
+const settingNextMenu = () => {
+  if (!graph.value) return;
+
+  graph.value.on("edge:mouseup", ({ edge, e }) => {
+    if (!edge.getTargetCell()) {
+      hideNextMenu();
+      if (nextMenuRef.value) {
+        const bbox = nextMenuRef.value.getBoundingClientRect();
+        let x = e.clientX;
+        let y = e.clientY;
+        x =
+          bbox.width + x > window.innerWidth
+            ? x - (bbox.width + x - window.innerWidth)
+            : x;
+        y =
+          bbox.height + y > window.innerHeight
+            ? y - (bbox.height + y - window.innerHeight)
+            : y;
+        nextMenu.pos = { x, y };
+        const edgeProp = edge.getProp(),
+          offsetX = x - e.clientX,
+          offsetY = y - e.clientY;
+        edgeProp.target.x += offsetX;
+        edgeProp.target.y += offsetY;
+        nextMenu.edge = graph.value?.addEdge(edgeProp);
+      }
+    }
+  });
+
+  window.addEventListener("mousedown", hideNextMenu);
+};
+
+const hideNextMenu = () => {
+  nextMenu.pos = undefined;
+  if (nextMenu.edge?.id) {
+    graph.value?.removeCell(nextMenu.edge.id);
+    nextMenu.edge = undefined;
+  }
+};
+const handleChooseNode = (shape: string) => {
+  nextMenu.pos = undefined;
+  if (graph.value && nextMenu.edge && nextMenu.edge.isEdge()) {
+    // 添加节点
+    const newNode = graph.value.addNode({
+      id: randomID(),
+      shape,
+      ...nextMenu.edge.getTargetPoint(),
+    });
+    // 将新建出来的连线设置target，完成连线
+    nextMenu.edge.setTarget(newNode);
+    nextMenu.edge
+      .getSourceNode()
+      ?.setPortProp(nextMenu.edge.getSourcePortId()!, {
+        attrs: { circle: { connected: true } },
+      });
+    //手动触发仅支持一个
+    onlyOutgoingEdge({ edge: nextMenu.edge });
+    nextMenu.edge = undefined;
+  }
+};
 //#endregion
 </script>
-<style scoped>
-.graph-drawer {
-  width: 350px;
-  height: 100%;
-  position: absolute;
-  overflow: auto;
-  left: 0;
-  top: 0;
-  z-index: 1;
-  background: white;
-}
-</style>
-<style>
-.edge-remove {
-  --edge-remove-bg-color: white;
-  cursor: pointer;
-}
-.edge-remove:hover {
-  --edge-remove-bg-color: var(--pl-color-brand-light-9);
-}
+<style lang="less">
+@import "./graph.less";
 </style>

@@ -1,7 +1,6 @@
-<script setup>
-import GraphCanvas from './components/graph/GraphCanvas.vue'
-</script>
-
 <template>
-  <GraphCanvas />
+  <GraphCanvas ref="CanvasRef" />
 </template>
+<script setup lang="ts">
+import GraphCanvas from "./components/graph/GraphCanvas.vue";
+</script>
